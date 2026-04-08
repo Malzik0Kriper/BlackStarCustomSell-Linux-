@@ -1,855 +1,639 @@
 import customtkinter as ctk
-import tkinter as tk
-from tkinter import filedialog
-import os, sys, subprocess, threading, datetime, ctypes, winreg
+import subprocess
+import os
+import sys
+import threading
+import glob
+import random
+import time
+import datetime
 from pathlib import Path
 from PIL import Image, ImageTk
-import psutil
-import platform
-
-def open_uri(uri: str):
-    if platform.system() == "Windows":
-        os.startfile(uri)
-    else:
-        subprocess.Popen(['xdg-open', uri])
  
+# ─── Paths (всі ресурси поруч з цим скриптом) ─────────────────────────────────
+BASE_DIR   = Path(__file__).parent.resolve()
+WALLPAPER_DIR = BASE_DIR / "Wallpaper"
+CURSOR_FILE   = BASE_DIR / "BSC.cur"
+HELLO_SOUND   = BASE_DIR / "hellow.mp3"
+ICON_FILE     = BASE_DIR / "icon.png"
+ 
+# ─── Pygame sound init ─────────────────────────────────────────────────────────
 try:
-    import win32gui, win32con
-    HAS_WIN32 = True
+    import pygame
+    pygame.mixer.init()
+    HAS_PYGAME = True
 except ImportError:
-    HAS_WIN32 = False
+    HAS_PYGAME = False
  
-# ── Paths ──────────────────────────────────────────────────────────────────────
-BASE_DIR    = Path(__file__).parent
-PROG_DIR    = BASE_DIR / "program"
-WALL_DIR    = BASE_DIR / "Wallpaper"
-ICON_PATH   = BASE_DIR / "icon.png"
-CURSOR_PATH = BASE_DIR / "BSC.cur"
- 
-# ── Palette ────────────────────────────────────────────────────────────────────
-ACCENT    = "#0078D4"
-ACCENT_H  = "#1090E0"
-BG_DARK   = "#111111"
-BG_PANEL  = "#1E1E1E"
-BG_CARD   = "#2A2A2A"
-BG_HOVER  = "#3A3A3A"     # solid hover — no alpha codes!
-TEXT_PRI  = "#FFFFFF"
-TEXT_SEC  = "#AAAAAA"
-BORDER    = "#3A3A3A"
-SEP       = "#2E2E2E"
- 
+# ─── CustomTkinter theme ───────────────────────────────────────────────────────
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+ctk.set_default_color_theme("dark-blue")
  
+# ══════════════════════════════════════════════════════════════════════════════
+#  Helpers
+# ══════════════════════════════════════════════════════════════════════════════
  
-# ── Helpers ────────────────────────────────────────────────────────────────────
- 
-def safe_popen(cmd):
-    try:
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(cmd, creationflags=flags)
-    except Exception as e:
-        print(f"[WARN] {cmd}: {e}")
- 
- 
-def open_uri(uri: str):
-    """Open ms-settings:, shell:, http, or file paths."""
-    try:
-        os.startfile(uri)
-    except Exception as e:
-        print(f"[WARN] startfile {uri}: {e}")
- 
- 
-def get_exe_icon_ctk(path: Path, size=24):
-    """Return CTkImage from .exe icon, or None."""
-    if not HAS_WIN32:
-        return None
-    try:
-        import win32ui
-        large, small = win32gui.ExtractIconEx(str(path), 0)
-        hicon = (large or small)
-        if not hicon:
-            return None
-        hicon = hicon[0]
-        hdc  = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-        hbmp = win32ui.CreateBitmap()
-        hbmp.CreateCompatibleBitmap(hdc, 32, 32)
-        mdc  = hdc.CreateCompatibleDC()
-        mdc.SelectObject(hbmp)
-        win32gui.DrawIconEx(mdc.GetHandleOutput(), 0, 0, hicon,
-                            32, 32, 0, None, win32con.DI_NORMAL)
-        info = hbmp.GetInfo()
-        bits = hbmp.GetBitmapBits(True)
-        img  = Image.frombuffer("RGB", (info["bmWidth"], info["bmHeight"]),
-                                bits, "raw", "BGRX", 0, 1)
-        img  = img.resize((size, size), Image.LANCZOS)
-        win32gui.DestroyIcon(hicon)
-        return ctk.CTkImage(img, size=(size, size))
-    except Exception:
-        return None
- 
- 
-def get_shell_icon_ctk(path: Path, size=28):
-    """Return CTkImage via SHGetFileInfoW (ctypes only, no win32com)."""
-    if not HAS_WIN32:
-        return None
-    try:
-        import win32ui
-        import ctypes.wintypes as wt
- 
-        SHGFI_ICON      = 0x100
-        SHGFI_SMALLICON = 0x001
- 
-        class SHFILEINFO(ctypes.Structure):
-            _fields_ = [("hIcon", wt.HICON),("iIcon", ctypes.c_int),
-                        ("dwAttributes", wt.DWORD),
-                        ("szDisplayName", ctypes.c_wchar * 260),
-                        ("szTypeName", ctypes.c_wchar * 80)]
- 
-        info  = SHFILEINFO()
-        ret   = ctypes.windll.shell32.SHGetFileInfoW(
-                    str(path), 0, ctypes.byref(info),
-                    ctypes.sizeof(info), SHGFI_ICON | SHGFI_SMALLICON)
-        if not ret or not info.hIcon:
-            return None
- 
-        hdc  = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-        hbmp = win32ui.CreateBitmap()
-        hbmp.CreateCompatibleBitmap(hdc, size, size)
-        mdc  = hdc.CreateCompatibleDC()
-        mdc.SelectObject(hbmp)
-        win32gui.DrawIconEx(mdc.GetHandleOutput(), 0, 0, info.hIcon,
-                            size, size, 0, None, win32con.DI_NORMAL)
-        bi   = hbmp.GetInfo()
-        bits = hbmp.GetBitmapBits(True)
-        img  = Image.frombuffer("RGB", (bi["bmWidth"], bi["bmHeight"]),
-                                bits, "raw", "BGRX", 0, 1)
-        img  = img.resize((size, size), Image.LANCZOS)
-        ctypes.windll.user32.DestroyIcon(info.hIcon)
-        return ctk.CTkImage(img, size=(size, size))
-    except Exception:
-        return None
- 
- 
-def get_wallpaper() -> Path | None:
-    h     = datetime.datetime.now().hour
-    night = h < 7 or h >= 20
-    if not WALL_DIR.exists():
-        return None
-    if night:
-        cands = list(WALL_DIR.glob("*night*"))
-    else:
-        cands = [p for p in WALL_DIR.glob("*.png") if "night" not in p.name.lower()]
-    if not cands:
-        cands = list(WALL_DIR.glob("*.png"))
-    return cands[0] if cands else None
- 
- 
-def get_desktop_items() -> list[Path]:
-    desktop = Path(os.path.expanduser("~/Desktop"))
-    if not desktop.exists():
-        return []
-    items = [p for p in sorted(desktop.iterdir()) if not p.name.startswith(".")]
-    return items[:40]
- 
- 
-def get_running_windows():
-    if not HAS_WIN32:
-        return []
-    skip = {"", "Default IME", "MSCTFIME UI", "Program Manager"}
-    result = []
-    def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd):
-            t = win32gui.GetWindowText(hwnd)
-            if t and t not in skip:
-                result.append((t[:30], hwnd))
-    win32gui.EnumWindows(cb, None)
-    return result[:16]
- 
- 
-def get_installed_programs():
-    apps = []
-    keys = [
-        (winreg.HKEY_LOCAL_MACHINE,
-         r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (winreg.HKEY_LOCAL_MACHINE,
-         r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (winreg.HKEY_CURRENT_USER,
-         r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-    ]
-    for hive, rpath in keys:
-        try:
-            reg = winreg.OpenKey(hive, rpath)
-            for i in range(winreg.QueryInfoKey(reg)[0]):
+def play_hello():
+    """Програє hellow.mp3 в окремому потоці."""
+    if not HELLO_SOUND.exists():
+        return
+    def _play():
+        if HAS_PYGAME:
+            pygame.mixer.music.load(str(HELLO_SOUND))
+            pygame.mixer.music.play()
+        else:
+            # Fallback: aplay / mpg123
+            for cmd in [["mpg123", "-q", str(HELLO_SOUND)],
+                        ["aplay", str(HELLO_SOUND)],
+                        ["ffplay", "-nodisp", "-autoexit", str(HELLO_SOUND)]]:
                 try:
-                    sub = winreg.OpenKey(reg, winreg.EnumKey(reg, i))
-                    name = winreg.QueryValueEx(sub, "DisplayName")[0]
-                    try:
-                        ico = winreg.QueryValueEx(sub, "DisplayIcon")[0]
-                        exe = ico.split(",")[0].strip('"').strip()
-                    except Exception:
-                        exe = ""
-                    if name:
-                        apps.append((name.strip(), exe))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    seen, unique = set(), []
-    for name, exe in sorted(apps, key=lambda x: x[0].lower()):
-        if name not in seen:
-            seen.add(name)
-            unique.append((name, exe))
-    return unique
+                    subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
+                    break
+                except FileNotFoundError:
+                    continue
+    threading.Thread(target=_play, daemon=True).start()
  
  
-def set_custom_cursor(path: Path):
-    if path.exists():
+def set_cursor():
+    """Встановлює кастомний курсор через xsetroot (якщо .cur конвертувати)."""
+    if not CURSOR_FILE.exists():
+        return
+    # На Linux .cur → xcursor через xcursorgen або просто встановлюємо системний
+    xcursor = BASE_DIR / "BSC_cursor"
+    if not xcursor.exists():
+        # Спробуємо конвертувати через convert (ImageMagick)
         try:
-            hcur = ctypes.windll.user32.LoadCursorFromFileW(str(path))
-            if hcur:
-                ctypes.windll.user32.SetSystemCursor(hcur, 32512)
+            subprocess.run(["convert", str(CURSOR_FILE), str(xcursor)],
+                           stderr=subprocess.DEVNULL, check=True)
         except Exception:
             pass
- 
- 
-def restore_cursors():
+    # xsetroot -cursor_name або xcursorgen — якщо недоступно, пропускаємо
     try:
-        ctypes.windll.user32.SystemParametersInfoW(0x0057, 0, None, 0)
-    except Exception:
+        subprocess.Popen(["xsetroot", "-cursor", str(CURSOR_FILE), str(CURSOR_FILE)],
+                         stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
         pass
  
  
-def add_tooltip(widget, text: str):
-    tip = None
-    def show(e):
-        nonlocal tip
-        tip = tk.Toplevel(widget)
-        tip.overrideredirect(True)
-        tip.wm_attributes("-topmost", True)
-        tk.Label(tip, text=text, bg=BG_CARD, fg=TEXT_PRI,
-                 font=("Segoe UI", 9), padx=6, pady=3).pack()
-        tip.geometry(f"+{e.x_root+10}+{e.y_root+22}")
-    def hide(e):
-        nonlocal tip
-        if tip:
-            tip.destroy(); tip = None
-    widget.bind("<Enter>", show, add="+")
-    widget.bind("<Leave>", hide, add="+")
- 
- 
-# ── Win11 Context Menu ─────────────────────────────────────────────────────────
- 
-class CtxMenu(tk.Toplevel):
-    """items: list of (label, callback) or None for separator."""
-    def __init__(self, root, x, y, items):
-        super().__init__(root)
-        self.overrideredirect(True)
-        self.wm_attributes("-topmost", True)
-        self.configure(bg=BORDER)
-        inner = tk.Frame(self, bg=BG_PANEL, padx=0, pady=6)
-        inner.pack(padx=1, pady=1)
-        for item in items:
-            if item is None:
-                tk.Frame(inner, height=1, bg=SEP).pack(fill="x", padx=10, pady=3)
-                continue
-            label, cb = item
-            row = tk.Frame(inner, bg=BG_PANEL, cursor="hand2")
-            row.pack(fill="x", padx=4)
-            lbl = tk.Label(row, text=label, bg=BG_PANEL, fg=TEXT_PRI,
-                           font=("Segoe UI", 10), anchor="w",
-                           padx=14, pady=7)
-            lbl.pack(fill="x")
-            def enter(e, r=row, l=lbl): r.config(bg=ACCENT); l.config(bg=ACCENT)
-            def leave(e, r=row, l=lbl): r.config(bg=BG_PANEL); l.config(bg=BG_PANEL)
-            def click(e, c=cb): self._run(c)
-            for w in (row, lbl):
-                w.bind("<Enter>", enter)
-                w.bind("<Leave>", leave)
-                w.bind("<Button-1>", click)
-        self.update_idletasks()
-        w = self.winfo_reqwidth(); h = self.winfo_reqheight()
-        sw = self.winfo_screenwidth(); sh = self.winfo_screenheight()
-        x = min(x, sw-w-8); y = min(y, sh-h-8)
-        self.geometry(f"+{x}+{y}")
-        self.focus_force()
-        self.bind("<FocusOut>", lambda e: self.destroy())
- 
-    def _run(self, cb):
-        self.destroy()
-        if cb:
-            try: cb()
-            except Exception as ex: print(f"[Ctx] {ex}")
- 
- 
-# ── Start Menu ─────────────────────────────────────────────────────────────────
- 
-class StartMenu(ctk.CTkToplevel):
-    def __init__(self, master, programs, anchor_x, anchor_y):
-        super().__init__(master)
-        self.programs    = programs
-        self._inst_cache = None
-        self.overrideredirect(True)
-        self.wm_attributes("-topmost", True)
-        self.configure(fg_color=BG_PANEL)
- 
-        # Header
-        hdr = ctk.CTkFrame(self, fg_color=BG_DARK, height=52, corner_radius=0)
-        hdr.pack(fill="x"); hdr.pack_propagate(False)
-        ctk.CTkLabel(hdr, text="⬛  BLACKSTAR",
-                     font=("Segoe UI", 14, "bold"),
-                     text_color=TEXT_PRI).pack(side="left", padx=16)
- 
-        # Search
-        self._q = ctk.StringVar()
-        self._q.trace_add("write", self._on_search)
-        ctk.CTkEntry(self, placeholder_text="🔍  Пошук...",
-                     textvariable=self._q,
-                     fg_color=BG_CARD, border_color=BORDER,
-                     font=("Segoe UI", 11)
-                     ).pack(fill="x", padx=12, pady=(10, 4))
- 
-        # Tab bar
-        tbar = ctk.CTkFrame(self, fg_color="transparent", height=36)
-        tbar.pack(fill="x", padx=12); tbar.pack_propagate(False)
-        self._tab = tk.StringVar(value="bs")
-        ctk.CTkRadioButton(tbar, text="BLACKSTAR", variable=self._tab,
-                           value="bs", fg_color=ACCENT,
-                           font=("Segoe UI", 10), text_color=TEXT_PRI,
-                           command=self._switch).pack(side="left", padx=(0,12))
-        ctk.CTkRadioButton(tbar, text="Встановлені", variable=self._tab,
-                           value="inst", fg_color=ACCENT,
-                           font=("Segoe UI", 10), text_color=TEXT_PRI,
-                           command=self._switch).pack(side="left")
- 
-        # Scroll
-        self._scroll = ctk.CTkScrollableFrame(self, fg_color="transparent",
-                                               scrollbar_button_color=ACCENT)
-        self._scroll.pack(fill="both", expand=True, padx=8, pady=4)
- 
-        # Footer
-        ftr = ctk.CTkFrame(self, fg_color=BG_DARK, height=48, corner_radius=0)
-        ftr.pack(fill="x", side="bottom"); ftr.pack_propagate(False)
-        ctk.CTkButton(ftr, text="⏻  Живлення",
-                      fg_color="transparent", hover_color="#770000",
-                      text_color=TEXT_SEC, font=("Segoe UI", 10), width=110,
-                      command=self._power).pack(side="right", padx=10, pady=8)
- 
-        self._render_bs(programs)
- 
-        self.update_idletasks()
-        w = 400; h = 560
-        self.geometry(f"{w}x{h}+{anchor_x}+{anchor_y}")
-        self.focus_force()
-        self.bind("<FocusOut>", lambda e: self.destroy())
- 
-    # ── helpers ──
-    def _clear(self):
-        for w in self._scroll.winfo_children():
-            w.destroy()
- 
-    def _row(self, name, icon, cb):
-        row = ctk.CTkFrame(self._scroll, fg_color="transparent",
-                           corner_radius=8, cursor="hand2")
-        row.pack(fill="x", pady=2, padx=4)
-        if icon:
-            ctk.CTkLabel(row, image=icon, text="").pack(
-                side="left", padx=(8,4), pady=4)
-        ctk.CTkLabel(row, text=name, font=("Segoe UI",11),
-                     text_color=TEXT_PRI, anchor="w").pack(
-            side="left", padx=4, pady=8, fill="x", expand=True)
-        def enter(e, r=row): r.configure(fg_color=BG_CARD)
-        def leave(e, r=row): r.configure(fg_color="transparent")
-        for w in (row, *row.winfo_children()):
-            w.bind("<Enter>", enter, add="+")
-            w.bind("<Leave>", leave, add="+")
-            w.bind("<Button-1>", lambda e, c=cb: c(), add="+")
- 
-    def _render_bs(self, progs):
-        self._clear()
-        if not progs:
-            ctk.CTkLabel(self._scroll, text="Немає .exe у папці program/",
-                         text_color=TEXT_SEC).pack(pady=20)
+def set_wallpaper(path: str):
+    """Встановлює шпалери через feh або nitrogen або hsetroot."""
+    for cmd in [["feh", "--bg-scale", path],
+                ["nitrogen", "--set-scaled", path],
+                ["hsetroot", "-fill", path],
+                ["xwallpaper", "--zoom", path]]:
+        try:
+            subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
             return
-        for p in progs:
-            icon = get_exe_icon_ctk(p, 22)
-            def launch(path=p):
-                self.destroy()
-                try: subprocess.Popen([str(path)], cwd=str(path.parent))
-                except Exception as ex: print(ex)
-            self._row(p.stem, icon, launch)
- 
-    def _render_inst(self, apps=None):
-        self._clear()
-        if apps is None:
-            ctk.CTkLabel(self._scroll, text="⏳ Завантаження списку...",
-                         text_color=TEXT_SEC).pack(pady=20)
-            def load():
-                if self._inst_cache is None:
-                    self._inst_cache = get_installed_programs()
-                self.after(0, lambda: self._render_inst(self._inst_cache))
-            threading.Thread(target=load, daemon=True).start()
-            return
-        q = self._q.get().lower()
-        filtered = [(n,e) for n,e in apps if q in n.lower()][:150]
-        if not filtered:
-            ctk.CTkLabel(self._scroll, text="Нічого не знайдено",
-                         text_color=TEXT_SEC).pack(pady=20); return
-        for name, exe in filtered:
-            exe_path = Path(exe) if exe else None
-            icon = get_exe_icon_ctk(exe_path, 22) if exe_path and exe_path.exists() else None
-            def launch(e=exe, n=name):
-                self.destroy()
-                if e and Path(e).exists():
-                    try: subprocess.Popen([e])
-                    except Exception as ex: print(ex)
-            self._row(name, icon, launch)
- 
-    def _switch(self):
-        if self._tab.get() == "bs":
-            q = self._q.get().lower()
-            self._render_bs([p for p in self.programs if q in p.stem.lower()])
-        else:
-            self._render_inst(self._inst_cache)
- 
-    def _on_search(self, *_):
-        self._switch()
- 
-    def _power(self):
-        m = tk.Menu(self, tearoff=False, bg=BG_PANEL, fg=TEXT_PRI,
-                    activebackground=ACCENT, activeforeground=TEXT_PRI,
-                    font=("Segoe UI",10), bd=0)
-        m.add_command(label="🔒  Блокування",
-                      command=lambda: ctypes.windll.user32.LockWorkStation())
-        m.add_command(label="🔄  Перезавантаження",
-                      command=lambda: os.system("shutdown /r /t 0"))
-        m.add_separator()
-        m.add_command(label="⏻  Вимкнення",
-                      command=lambda: os.system("shutdown /s /t 0"))
-        m.tk_popup(self.winfo_rootx()+10,
-                   self.winfo_rooty()+self.winfo_height()-60)
+        except FileNotFoundError:
+            continue
  
  
-# ── Top App Bar ────────────────────────────────────────────────────────────────
- 
-class TopAppBar(tk.Frame):
-    """Semi-transparent centred bar pinned at the top."""
-    PANEL_BG = "#1C1C1C"
- 
-    def __init__(self, master, programs, **kw):
-        super().__init__(master, bg=BG_DARK, height=48, **kw)
-        self.programs = list(programs)
-        self._icons   = []
-        self._build()
- 
-    def _build(self):
-        for w in self.winfo_children():
-            w.destroy()
-        self._icons.clear()
- 
-        # centre pill
-        pill = tk.Frame(self, bg="#1F1F1F", relief="flat")
-        pill.place(relx=0.5, rely=0.5, anchor="center")
- 
-        tk.Label(pill, text="📌", bg="#1F1F1F", fg=TEXT_SEC,
-                 font=("Segoe UI",10)).pack(side="left", padx=(8,2), pady=4)
- 
-        for prog in self.programs[:12]:
-            icon = get_exe_icon_ctk(prog, 24)
-            self._icons.append(icon)
-            if icon:
-                btn = ctk.CTkButton(
-                    pill, image=icon, text="",
-                    width=38, height=36,
-                    fg_color="transparent", hover_color=BG_HOVER,
-                    corner_radius=8,
-                    command=lambda p=prog: self._launch(p))
-            else:
-                btn = ctk.CTkButton(
-                    pill, text=prog.stem[:9],
-                    width=80, height=36,
-                    fg_color="transparent", hover_color=BG_HOVER,
-                    text_color=TEXT_PRI, font=("Segoe UI",9),
-                    corner_radius=8,
-                    command=lambda p=prog: self._launch(p))
-            btn.pack(side="left", padx=2, pady=4)
-            add_tooltip(btn, prog.stem)
- 
-        ctk.CTkButton(pill, text="✏", width=28, height=28,
-                      fg_color="transparent", hover_color=BG_HOVER,
-                      text_color=TEXT_SEC, font=("Segoe UI",12),
-                      corner_radius=8,
-                      command=self._edit).pack(side="left", padx=(2,8))
- 
-    def _launch(self, prog: Path):
-        try:
-            subprocess.Popen([str(prog)], cwd=str(prog.parent))
-        except Exception as ex:
-            print(f"[TopBar] {ex}")
- 
-    def _edit(self):
-        EditPinnedDialog(self, self.programs, self._on_done)
- 
-    def _on_done(self, new):
-        self.programs = new
-        self._build()
+def get_wallpapers():
+    exts = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
+    files = []
+    if WALLPAPER_DIR.exists():
+        for ext in exts:
+            files.extend(glob.glob(str(WALLPAPER_DIR / ext)))
+            files.extend(glob.glob(str(WALLPAPER_DIR / ext.upper())))
+    return files
  
  
-class EditPinnedDialog(ctk.CTkToplevel):
-    def __init__(self, master, current, callback):
-        super().__init__(master)
-        self.callback = callback; self.current = current
-        self.title("Закріплені програми")
-        self.geometry("320x440")
-        self.configure(fg_color=BG_PANEL)
-        self.wm_attributes("-topmost", True)
-        ctk.CTkLabel(self, text="Оберіть програми",
-                     font=("Segoe UI",13,"bold"),
-                     text_color=TEXT_PRI).pack(pady=(16,8))
-        scr = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        scr.pack(fill="both", expand=True, padx=12)
-        self._vars = {}
-        for p in sorted(PROG_DIR.glob("*.exe")) if PROG_DIR.exists() else []:
-            v = tk.BooleanVar(value=(p in current))
-            self._vars[p] = v
-            ctk.CTkCheckBox(scr, text=p.stem, variable=v,
-                            text_color=TEXT_PRI, font=("Segoe UI",11),
-                            fg_color=ACCENT, hover_color=ACCENT_H
-                            ).pack(anchor="w", pady=3)
-        ctk.CTkButton(self, text="Зберегти",
-                      fg_color=ACCENT, hover_color=ACCENT_H,
-                      font=("Segoe UI",11,"bold"),
-                      command=self._save
-                      ).pack(fill="x", padx=12, pady=12)
- 
-    def _save(self):
-        self.callback([p for p,v in self._vars.items() if v.get()])
-        self.destroy()
+def run_command(cmd: str):
+    """Запускає команду в окремому потоці."""
+    threading.Thread(target=lambda: subprocess.Popen(
+        cmd, shell=True, stderr=subprocess.DEVNULL), daemon=True).start()
  
  
-# ── Desktop ────────────────────────────────────────────────────────────────────
- 
-class Desktop(tk.Canvas):
-    IW = 78; IH = 74
- 
-    def __init__(self, master, **kw):
-        super().__init__(master, highlightthickness=0, bd=0, bg=BG_DARK, **kw)
-        self._bg_photo = None
-        self._bg_orig  = None
-        self._refs     = []
-        self._load_wp()
-        self._draw_items()
-        self.bind("<Configure>", lambda e: self._resize_bg())
-        self.bind("<Button-3>",  self._rclick)
- 
-    def _load_wp(self):
-        wp = get_wallpaper()
-        if wp:
-            try: self._bg_orig = Image.open(wp)
-            except Exception: pass
-        self._resize_bg()
- 
-    def _resize_bg(self):
-        if not self._bg_orig: return
-        w = max(self.winfo_width(), 1)
-        h = max(self.winfo_height(), 1)
-        img = self._bg_orig.resize((w, h), Image.LANCZOS)
-        self._bg_photo = ImageTk.PhotoImage(img)
-        self.delete("_bg")
-        self.create_image(0, 0, anchor="nw", image=self._bg_photo, tags="_bg")
-        self.tag_lower("_bg")
- 
-    def _draw_items(self):
-        self.delete("_item")
-        self._refs.clear()
-        items = get_desktop_items()
- 
-        screen_h = self.winfo_height() or 700
-        max_rows = max(1, (screen_h - 16) // (self.IH + 4))
-        col = row = 0
- 
-        for i, path in enumerate(items):
-            x = 14 + col * (self.IW + 8)
-            y = 14 + row * (self.IH + 4)
- 
-            icon = get_shell_icon_ctk(path, 32)
-            if icon:
-                # pull PIL image out of CTkImage for canvas
-                pil = icon._light_image
-                tk_img = ImageTk.PhotoImage(pil)
-                self._refs.append(tk_img)
-                self.create_image(x + self.IW//2, y + 20,
-                                  image=tk_img, tags=f"i{i} _item")
-            else:
-                sym = "📁" if path.is_dir() else "📄"
-                self.create_text(x + self.IW//2, y + 20,
-                                 text=sym, font=("Segoe UI Emoji",18),
-                                 fill=TEXT_PRI, tags=f"i{i} _item")
- 
-            name = (path.stem if path.suffix else path.name)[:13]
-            self.create_text(x + self.IW//2, y + 52,
-                             text=name, fill=TEXT_PRI,
-                             font=("Segoe UI", 8), width=self.IW,
-                             justify="center", tags=f"i{i} _item")
- 
-            self.tag_bind(f"i{i}", "<Double-Button-1>",
-                          lambda e, p=path: self._open(p))
-            self.tag_bind(f"i{i}", "<Enter>",
-                          lambda e, n=i: self._hover(n, True))
-            self.tag_bind(f"i{i}", "<Leave>",
-                          lambda e, n=i: self._hover(n, False))
-            self.tag_bind(f"i{i}", "<Button-3>",
-                          lambda e, p=path: self._item_ctx(e, p))
- 
-            row += 1
-            if row >= max_rows:
-                row = 0; col += 1
- 
-    def _hover(self, idx, on):
-        self.delete(f"_hov{idx}")
-        if on:
-            bb = self.bbox(f"i{idx}")
-            if bb:
-                x1,y1,x2,y2 = bb
-                # solid colour, no alpha hex — fixes TclError
-                self.create_rectangle(x1-3, y1-3, x2+3, y2+3,
-                                      outline=ACCENT, fill=BG_HOVER,
-                                      tags=f"_hov{idx}")
-                self.tag_lower(f"_hov{idx}", f"i{idx}")
- 
-    def _open(self, path: Path):
-        try: os.startfile(str(path))
-        except Exception as ex: print(f"[Desktop] {ex}")
- 
-    def _rclick(self, event):
-        CtxMenu(self.winfo_toplevel(), event.x_root, event.y_root, [
-            ("🔄  Оновити",         self._reload),
-            ("📂  Робочий стіл",    lambda: open_uri(str(Path.home()/"Desktop"))),
-            None,
-            ("🖼️  Змінити шпалери", self._change_wp),
-            ("🖥️  Параметри екрану",lambda: open_uri("ms-settings:display")),
-            None,
-            ("💻  Про систему",     lambda: open_uri("ms-settings:about")),
-        ])
- 
-    def _item_ctx(self, event, path: Path):
-        CtxMenu(self.winfo_toplevel(), event.x_root, event.y_root, [
-            ("▶️  Відкрити",    lambda: self._open(path)),
-            ("📋  Властивості", lambda: ctypes.windll.shell32.ShellExecuteW(
-                None,"properties",str(path),None,None,1)),
-        ])
- 
-    def _change_wp(self):
-        p = filedialog.askopenfilename(
-            filetypes=[("Зображення","*.png *.jpg *.jpeg *.bmp")])
-        if p:
-            try:
-                self._bg_orig = Image.open(p)
-                self._resize_bg()
-            except Exception: pass
- 
-    def _reload(self):
-        self._load_wp(); self._draw_items()
+def get_sys_info():
+    cpu = mem = "N/A"
+    try:
+        with open("/proc/loadavg") as f:
+            cpu = f.read().split()[0] + " load"
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo") as f:
+            lines = f.readlines()
+        total = free = 0
+        for l in lines:
+            if l.startswith("MemTotal"):
+                total = int(l.split()[1])
+            elif l.startswith("MemAvailable"):
+                free = int(l.split()[1])
+        used_pct = 100 - int(free / total * 100) if total else 0
+        mem = f"{used_pct}% RAM"
+    except Exception:
+        pass
+    return cpu, mem
  
  
-# ── Right Vertical Taskbar ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  APP LAUNCHER CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
  
-class RightBar(ctk.CTkFrame):
-    def __init__(self, master, open_start, **kw):
-        super().__init__(master, fg_color="#0E0E0E", width=224,
-                         corner_radius=0, **kw)
-        self.pack_propagate(False)
-        self._open_start = open_start
-        self._run_btns   = {}
-        self._icon_refs  = []
-        self._build()
-        self._tick()
-        self._poll()
- 
-    def _build(self):
-        # ── Start button ──
-        if ICON_PATH.exists():
-            try:
-                raw = Image.open(ICON_PATH).resize((28,28), Image.LANCZOS)
-                self._menu_ctk = ctk.CTkImage(raw, size=(28,28))
-                sb = ctk.CTkButton(self, image=self._menu_ctk, text="  Меню",
-                                   compound="left", fg_color=ACCENT,
-                                   hover_color=ACCENT_H,
-                                   font=("Segoe UI",11,"bold"),
-                                   height=42, corner_radius=8,
-                                   command=self._open_start)
-            except Exception:
-                sb = ctk.CTkButton(self, text="⬛  Меню", fg_color=ACCENT,
-                                   hover_color=ACCENT_H,
-                                   font=("Segoe UI",11,"bold"),
-                                   height=42, corner_radius=8,
-                                   command=self._open_start)
-        else:
-            sb = ctk.CTkButton(self, text="⬛  Меню", fg_color=ACCENT,
-                               hover_color=ACCENT_H,
-                               font=("Segoe UI",11,"bold"),
-                               height=42, corner_radius=8,
-                               command=self._open_start)
-        sb.pack(fill="x", padx=10, pady=(14,6))
- 
-        _sep = lambda: tk.Frame(self, height=1, bg=SEP).pack(fill="x",padx=10,pady=4)
- 
-        _sep()
- 
-        # Clock
-        self._clk = ctk.CTkLabel(self, text="", font=("Segoe UI",18,"bold"),
-                                   text_color=TEXT_PRI)
-        self._clk.pack(pady=(6,0))
-        self._dt = ctk.CTkLabel(self, text="", font=("Segoe UI",9),
-                                 text_color=TEXT_SEC)
-        self._dt.pack()
- 
-        _sep()
- 
-        ctk.CTkLabel(self, text="Запущені вікна",
-                     font=("Segoe UI",10,"bold"),
-                     text_color=TEXT_SEC).pack(anchor="w", padx=12)
- 
-        self._run_scr = ctk.CTkScrollableFrame(
-            self, fg_color="transparent",
-            scrollbar_button_color=ACCENT, height=240)
-        self._run_scr.pack(fill="x", padx=6, pady=(4,0))
- 
-        _sep()
- 
-        ctk.CTkLabel(self, text="Швидкий доступ",
-                     font=("Segoe UI",10,"bold"),
-                     text_color=TEXT_SEC).pack(anchor="w", padx=12)
- 
-        quick = [
-            ("⚙️  Параметри",   lambda: open_uri("ms-settings:")),
-            ("🗂️  Провідник",   lambda: safe_popen(["explorer"])),
-            ("🖥️  Диспетчер",   lambda: safe_popen(["taskmgr"])),
-            ("🔊  Гучність",    lambda: safe_popen(["sndvol"])),
-        ]
-        for lbl, cmd in quick:
-            ctk.CTkButton(self, text=lbl, anchor="w",
-                          fg_color=BG_CARD, hover_color=BG_HOVER,
-                          text_color=TEXT_PRI, font=("Segoe UI",10),
-                          height=34, corner_radius=6,
-                          command=cmd).pack(fill="x", padx=10, pady=2)
- 
-        _sep()
- 
-        self._cpu_l = ctk.CTkLabel(self, text="CPU: –",
-                                    font=("Segoe UI",9), text_color=TEXT_SEC)
-        self._cpu_l.pack(anchor="w", padx=14, pady=1)
-        self._ram_l = ctk.CTkLabel(self, text="RAM: –",
-                                    font=("Segoe UI",9), text_color=TEXT_SEC)
-        self._ram_l.pack(anchor="w", padx=14)
-        self._upd_sys()
- 
-    def _tick(self):
-        n = datetime.datetime.now()
-        self._clk.configure(text=n.strftime("%H:%M"))
-        self._dt.configure(text=n.strftime("%A, %d.%m.%Y"))
-        self.after(10000, self._tick)
- 
-    def _upd_sys(self):
-        try:
-            self._cpu_l.configure(text=f"CPU: {psutil.cpu_percent():.0f}%")
-            self._ram_l.configure(text=f"RAM: {psutil.virtual_memory().percent:.0f}%")
-        except Exception: pass
-        self.after(3000, self._upd_sys)
- 
-    def _poll(self):
-        wins = get_running_windows()
-        cur  = {h for _,h in wins}
-        for h in list(self._run_btns):
-            if h not in cur:
-                self._run_btns[h].destroy()
-                del self._run_btns[h]
-        for title, hwnd in wins:
-            if hwnd not in self._run_btns:
-                btn = ctk.CTkButton(
-                    self._run_scr, text=title, anchor="w",
-                    height=28, fg_color=BG_CARD, hover_color=ACCENT,
-                    text_color=TEXT_PRI, font=("Segoe UI",9),
-                    corner_radius=6,
-                    command=lambda h=hwnd: self._focus(h))
-                btn.pack(fill="x", pady=1, padx=2)
-                self._run_btns[hwnd] = btn
-        self.after(2500, self._poll)
- 
-    @staticmethod
-    def _focus(hwnd):
-        if not HAS_WIN32: return
-        try:
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.SetForegroundWindow(hwnd)
-        except Exception: pass
+APPS = [
+    {"name": "Термінал",    "cmd": "xterm",          "icon": "💻"},
+    {"name": "Браузер",     "cmd": "firefox",        "icon": "🌐"},
+    {"name": "Файли",       "cmd": "pcmanfm",        "icon": "📁"},
+    {"name": "Текст",       "cmd": "mousepad",       "icon": "📝"},
+    {"name": "Музика",      "cmd": "audacious",      "icon": "🎵"},
+    {"name": "Зображення",  "cmd": "eog",            "icon": "🖼"},
+    {"name": "Параметри",   "cmd": "xfce4-settings-manager", "icon": "⚙️"},
+    {"name": "Диспетчер",   "cmd": "xfce4-taskmanager",      "icon": "📊"},
+    {"name": "Калькулятор", "cmd": "galculator",     "icon": "🔢"},
+    {"name": "Мережа",      "cmd": "nm-applet",      "icon": "📡"},
+    {"name": "Bluetooth",   "cmd": "blueman-manager","icon": "🔵"},
+    {"name": "Вийти",       "cmd": "__logout__",     "icon": "🚪"},
+]
  
  
-# ── Shell Window ───────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN SHELL WINDOW
+# ══════════════════════════════════════════════════════════════════════════════
  
-class Shell(ctk.CTk):
+class BlackStarShell(ctk.CTk):
+    ACCENT   = "#00d4ff"
+    ACCENT2  = "#7c3aed"
+    BG       = "#0a0a0f"
+    PANEL    = "#11111a"
+    CARD     = "#16162a"
+    TEXT     = "#e8e8ff"
+    SUBTEXT  = "#8888aa"
+    SUCCESS  = "#22c55e"
+    WARN     = "#f59e0b"
+    DANGER   = "#ef4444"
+ 
     def __init__(self):
         super().__init__()
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{sw}x{sh}+0+0")
-        self.overrideredirect(True)
-        self.wm_attributes("-topmost", False)
-        self.title("BLACKSTAR Shell")
+        self.title("BlackStar OS")
+        self.configure(fg_color=self.BG)
  
-        set_custom_cursor(CURSOR_PATH)
-        self.protocol("WM_DELETE_WINDOW", self._quit)
-        self.bind("<Control-Alt-q>", lambda e: self._quit())
+        # Fullscreen / maximised
+        self.attributes("-fullscreen", True)
+        self.overrideredirect(False)
  
-        self.programs = sorted(PROG_DIR.glob("*.exe")) if PROG_DIR.exists() else []
- 
-        # Top bar
-        self.top = TopAppBar(self, self.programs)
-        self.top.pack(fill="x", side="top")
- 
-        # Middle
-        mid = tk.Frame(self, bg=BG_DARK)
-        mid.pack(fill="both", expand=True)
- 
-        self.desk = Desktop(mid)
-        self.desk.pack(fill="both", expand=True, side="left")
- 
-        self.rbar = RightBar(mid, open_start=self._show_start)
-        self.rbar.pack(fill="y", side="right")
- 
-        self._play_sound()
- 
-    def _show_start(self):
-        sw = self.winfo_screenwidth()
-        # appears just under the right bar's menu button
-        x = sw - 224 - 400
-        y = 48
-        StartMenu(self, self.programs, max(0, x), y)
- 
-    def _play_sound(self):
-        snd = BASE_DIR / "hellow.mp3"
-        if not snd.exists(): return
-        def _do():
+        # Icon
+        if ICON_FILE.exists():
             try:
-                subprocess.Popen(
-                    ["powershell","-WindowStyle","Hidden","-c",
-                     f"Add-Type -AssemblyName presentationCore;"
-                     f"$m=[System.Windows.Media.MediaPlayer]::new();"
-                     f"$m.Open('{snd}');$m.Play();Start-Sleep 6"],
-                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-            except Exception: pass
-        threading.Thread(target=_do, daemon=True).start()
+                img = Image.open(ICON_FILE).resize((32, 32))
+                self._icon = ImageTk.PhotoImage(img)
+                self.iconphoto(True, self._icon)
+            except Exception:
+                pass
  
-    def _quit(self):
-        restore_cursors()
-        self.destroy()
-        sys.exit(0)
+        # State
+        self._wallpapers   = get_wallpapers()
+        self._wall_index   = 0
+        self._start_open   = False
+        self._terminal_buf = []
+ 
+        self._build_ui()
+        self._start_clock()
+        self._start_sysinfo()
+        self._on_startup()
+ 
+    # ── STARTUP ───────────────────────────────────────────────────────────────
+    def _on_startup(self):
+        play_hello()
+        set_cursor()
+        if self._wallpapers:
+            set_wallpaper(self._wallpapers[0])
+        self._update_wallpaper_preview()
+        self._show_splash()
+ 
+    def _show_splash(self):
+        """Анімований splash-екран при старті."""
+        self.splash = ctk.CTkFrame(self, fg_color=self.BG, corner_radius=0)
+        self.splash.place(relx=0, rely=0, relwidth=1, relheight=1)
+ 
+        logo = ctk.CTkLabel(self.splash, text="★ BlackStar OS",
+                            font=ctk.CTkFont("monospace", 52, "bold"),
+                            text_color=self.ACCENT)
+        logo.place(relx=0.5, rely=0.4, anchor="center")
+ 
+        sub = ctk.CTkLabel(self.splash, text="Tiny Core Linux Shell — завантаження…",
+                           font=ctk.CTkFont("monospace", 16),
+                           text_color=self.SUBTEXT)
+        sub.place(relx=0.5, rely=0.52, anchor="center")
+ 
+        bar = ctk.CTkProgressBar(self.splash, width=420, progress_color=self.ACCENT,
+                                 fg_color="#1a1a2e")
+        bar.place(relx=0.5, rely=0.62, anchor="center")
+        bar.set(0)
+ 
+        def _anim(v=0.0):
+            if v <= 1.0:
+                bar.set(v)
+                self.after(20, lambda: _anim(v + 0.02))
+            else:
+                self.splash.destroy()
+ 
+        self.after(400, lambda: _anim())
+ 
+    # ── UI BUILD ──────────────────────────────────────────────────────────────
+    def _build_ui(self):
+        # ── Taskbar (top) ──────────────────────────────────────────────────
+        self.taskbar = ctk.CTkFrame(self, height=44, fg_color=self.PANEL,
+                                    corner_radius=0)
+        self.taskbar.pack(fill="x", side="top")
+        self.taskbar.pack_propagate(False)
+ 
+        # Logo / Start button
+        self.btn_start = ctk.CTkButton(
+            self.taskbar, text="  ★ BlackStar", width=130,
+            font=ctk.CTkFont("monospace", 14, "bold"),
+            fg_color=self.ACCENT2, hover_color="#5b21b6",
+            corner_radius=0, command=self._toggle_start_menu)
+        self.btn_start.pack(side="left", padx=(0, 8), fill="y")
+ 
+        # Quick launch icons
+        quick = [("💻", "xterm"), ("🌐", "firefox"), ("📁", "pcmanfm"),
+                 ("📝", "mousepad"), ("🎵", "audacious")]
+        for ico, cmd in quick:
+            b = ctk.CTkButton(self.taskbar, text=ico, width=38,
+                              font=ctk.CTkFont(size=16), fg_color="transparent",
+                              hover_color="#222233", corner_radius=6,
+                              command=lambda c=cmd: run_command(c))
+            b.pack(side="left", padx=2, pady=4)
+ 
+        # Clock + date (right)
+        self.lbl_clock = ctk.CTkLabel(self.taskbar, text="",
+                                      font=ctk.CTkFont("monospace", 15, "bold"),
+                                      text_color=self.ACCENT)
+        self.lbl_clock.pack(side="right", padx=14)
+        self.lbl_date = ctk.CTkLabel(self.taskbar, text="",
+                                     font=ctk.CTkFont("monospace", 11),
+                                     text_color=self.SUBTEXT)
+        self.lbl_date.pack(side="right", padx=4)
+ 
+        # Sys info (right)
+        self.lbl_sys = ctk.CTkLabel(self.taskbar, text="CPU — | RAM —",
+                                    font=ctk.CTkFont("monospace", 11),
+                                    text_color=self.SUBTEXT)
+        self.lbl_sys.pack(side="right", padx=14)
+ 
+        # ── Desktop area ───────────────────────────────────────────────────
+        self.desktop = ctk.CTkFrame(self, fg_color=self.BG, corner_radius=0)
+        self.desktop.pack(fill="both", expand=True)
+ 
+        # Desktop icons grid
+        self._build_desktop_icons()
+ 
+        # ── Start Menu (hidden initially) ──────────────────────────────────
+        self._build_start_menu()
+ 
+        # ── Right panel: widgets ───────────────────────────────────────────
+        self._build_right_panel()
+ 
+        # Close start menu on desktop click
+        self.desktop.bind("<Button-1>", lambda e: self._close_start_menu())
+ 
+    # ── DESKTOP ICONS ────────────────────────────────────────────────────────
+    def _build_desktop_icons(self):
+        self.icon_frame = ctk.CTkFrame(self.desktop, fg_color="transparent")
+        self.icon_frame.place(x=16, y=16)
+ 
+        icons = [
+            ("💻", "Термінал",    "xterm"),
+            ("🌐", "Браузер",     "firefox"),
+            ("📁", "Файли",       "pcmanfm"),
+            ("📝", "Текст",       "mousepad"),
+            ("🎵", "Медіа",       "audacious"),
+            ("⚙️", "Параметри",  "xfce4-settings-manager"),
+            ("📊", "Диспетчер",   "xfce4-taskmanager"),
+            ("🔢", "Калькулятор", "galculator"),
+        ]
+        cols = 1
+        for i, (ico, name, cmd) in enumerate(icons):
+            r, c = divmod(i, cols)
+            f = ctk.CTkFrame(self.icon_frame, fg_color="transparent",
+                             corner_radius=10, cursor="hand2")
+            f.grid(row=r, column=c, padx=6, pady=4, sticky="w")
+ 
+            lbl_i = ctk.CTkLabel(f, text=ico, font=ctk.CTkFont(size=26))
+            lbl_i.pack()
+            lbl_n = ctk.CTkLabel(f, text=name,
+                                 font=ctk.CTkFont("monospace", 9),
+                                 text_color=self.TEXT)
+            lbl_n.pack()
+ 
+            for w in (f, lbl_i, lbl_n):
+                w.bind("<Double-Button-1>", lambda e, c=cmd: run_command(c))
+                w.bind("<Enter>", lambda e, fr=f: fr.configure(fg_color="#1e1e3a"))
+                w.bind("<Leave>", lambda e, fr=f: fr.configure(fg_color="transparent"))
+ 
+    # ── START MENU ───────────────────────────────────────────────────────────
+    def _build_start_menu(self):
+        self.start_menu = ctk.CTkFrame(self, width=300, fg_color=self.PANEL,
+                                       corner_radius=12,
+                                       border_width=1, border_color=self.ACCENT2)
+        # Search
+        self.sm_search = ctk.CTkEntry(self.start_menu,
+                                      placeholder_text="🔍 Пошук...",
+                                      font=ctk.CTkFont("monospace", 13),
+                                      fg_color="#1a1a2e", border_color=self.ACCENT2)
+        self.sm_search.pack(padx=12, pady=(12, 6), fill="x")
+        self.sm_search.bind("<KeyRelease>", self._filter_apps)
+ 
+        self.sm_scroll = ctk.CTkScrollableFrame(self.start_menu, fg_color="transparent",
+                                                height=320)
+        self.sm_scroll.pack(fill="both", expand=True, padx=6, pady=4)
+ 
+        self._all_app_btns = []
+        for app in APPS:
+            btn = ctk.CTkButton(
+                self.sm_scroll,
+                text=f"{app['icon']}  {app['name']}",
+                anchor="w",
+                font=ctk.CTkFont("monospace", 13),
+                fg_color="transparent",
+                hover_color="#1e1e3a",
+                text_color=self.TEXT,
+                command=lambda a=app: self._launch_app(a))
+            btn.pack(fill="x", pady=2, padx=4)
+            self._all_app_btns.append((btn, app["name"]))
+ 
+        # Footer
+        foot = ctk.CTkFrame(self.start_menu, fg_color="#0d0d1a", corner_radius=0)
+        foot.pack(fill="x", side="bottom")
+        ctk.CTkButton(foot, text="🔒 Блокування", fg_color="transparent",
+                      hover_color="#1e1e3a", font=ctk.CTkFont("monospace", 11),
+                      command=lambda: run_command("xlock")).pack(side="left", padx=8, pady=6)
+        ctk.CTkButton(foot, text="⏻ Вимкнути", fg_color="transparent",
+                      hover_color="#3a0a0a", text_color=self.DANGER,
+                      font=ctk.CTkFont("monospace", 11),
+                      command=self._shutdown_dialog).pack(side="right", padx=8, pady=6)
+ 
+    def _filter_apps(self, _=None):
+        q = self.sm_search.get().lower()
+        for btn, name in self._all_app_btns:
+            if q in name.lower():
+                btn.pack(fill="x", pady=2, padx=4)
+            else:
+                btn.pack_forget()
+ 
+    def _toggle_start_menu(self):
+        if self._start_open:
+            self._close_start_menu()
+        else:
+            self._open_start_menu()
+ 
+    def _open_start_menu(self):
+        self.start_menu.place(x=0, y=44, relheight=0, height=420)
+        self._start_open = True
+ 
+    def _close_start_menu(self):
+        self.start_menu.place_forget()
+        self._start_open = False
+ 
+    def _launch_app(self, app):
+        self._close_start_menu()
+        if app["cmd"] == "__logout__":
+            self._shutdown_dialog()
+        else:
+            run_command(app["cmd"])
+ 
+    # ── RIGHT PANEL (clock widget, wallpaper, terminal) ───────────────────────
+    def _build_right_panel(self):
+        self.rpanel = ctk.CTkFrame(self.desktop, width=270, fg_color=self.PANEL,
+                                   corner_radius=0)
+        self.rpanel.pack(side="right", fill="y")
+        self.rpanel.pack_propagate(False)
+ 
+        # ── Big clock widget ───────────────────────────────────────────────
+        clock_card = ctk.CTkFrame(self.rpanel, fg_color=self.CARD, corner_radius=14)
+        clock_card.pack(fill="x", padx=10, pady=(14, 6))
+ 
+        self.big_clock = ctk.CTkLabel(clock_card, text="00:00",
+                                      font=ctk.CTkFont("monospace", 42, "bold"),
+                                      text_color=self.ACCENT)
+        self.big_clock.pack(pady=(10, 0))
+        self.big_date_lbl = ctk.CTkLabel(clock_card, text="",
+                                         font=ctk.CTkFont("monospace", 11),
+                                         text_color=self.SUBTEXT)
+        self.big_date_lbl.pack(pady=(0, 10))
+ 
+        # ── Wallpaper control ──────────────────────────────────────────────
+        wall_card = ctk.CTkFrame(self.rpanel, fg_color=self.CARD, corner_radius=14)
+        wall_card.pack(fill="x", padx=10, pady=6)
+ 
+        ctk.CTkLabel(wall_card, text="🖼 Шпалери",
+                     font=ctk.CTkFont("monospace", 13, "bold"),
+                     text_color=self.TEXT).pack(anchor="w", padx=10, pady=(8, 4))
+ 
+        self.wall_preview = ctk.CTkLabel(wall_card, text="",
+                                         width=240, height=130)
+        self.wall_preview.pack(padx=10, pady=4)
+ 
+        btn_row = ctk.CTkFrame(wall_card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkButton(btn_row, text="◀", width=50,
+                      fg_color=self.ACCENT2, hover_color="#5b21b6",
+                      command=self._prev_wall).pack(side="left")
+        ctk.CTkButton(btn_row, text="Встановити", width=130,
+                      fg_color="#1a1a2e", hover_color=self.ACCENT2,
+                      command=self._apply_wall).pack(side="left", padx=4)
+        ctk.CTkButton(btn_row, text="▶", width=50,
+                      fg_color=self.ACCENT2, hover_color="#5b21b6",
+                      command=self._next_wall).pack(side="right")
+ 
+        self.wall_name_lbl = ctk.CTkLabel(wall_card, text="Немає шпалер",
+                                          font=ctk.CTkFont("monospace", 10),
+                                          text_color=self.SUBTEXT)
+        self.wall_name_lbl.pack(pady=(0, 6))
+ 
+        # ── Sound widget ───────────────────────────────────────────────────
+        snd_card = ctk.CTkFrame(self.rpanel, fg_color=self.CARD, corner_radius=14)
+        snd_card.pack(fill="x", padx=10, pady=6)
+ 
+        ctk.CTkLabel(snd_card, text="🔊 Звук",
+                     font=ctk.CTkFont("monospace", 13, "bold"),
+                     text_color=self.TEXT).pack(anchor="w", padx=10, pady=(8, 4))
+ 
+        self.vol_slider = ctk.CTkSlider(snd_card, from_=0, to=100,
+                                        progress_color=self.ACCENT,
+                                        button_color=self.ACCENT2,
+                                        command=self._set_volume)
+        self.vol_slider.set(80)
+        self.vol_slider.pack(fill="x", padx=10, pady=(0, 4))
+ 
+        btn_snd = ctk.CTkFrame(snd_card, fg_color="transparent")
+        btn_snd.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkButton(btn_snd, text="▶ Привітання", width=140,
+                      fg_color="#1a1a2e", hover_color=self.ACCENT2,
+                      command=play_hello).pack(side="left")
+        ctk.CTkButton(btn_snd, text="🔇", width=50,
+                      fg_color="transparent", hover_color="#1e1e3a",
+                      command=lambda: self._set_volume(0)).pack(side="right")
+ 
+        # ── Mini terminal ──────────────────────────────────────────────────
+        term_card = ctk.CTkFrame(self.rpanel, fg_color=self.CARD, corner_radius=14)
+        term_card.pack(fill="both", expand=True, padx=10, pady=6)
+ 
+        ctk.CTkLabel(term_card, text="💻 Термінал",
+                     font=ctk.CTkFont("monospace", 13, "bold"),
+                     text_color=self.TEXT).pack(anchor="w", padx=10, pady=(8, 2))
+ 
+        self.term_out = ctk.CTkTextbox(term_card, height=100,
+                                       font=ctk.CTkFont("monospace", 11),
+                                       fg_color="#06060e", text_color="#00ff88",
+                                       corner_radius=8)
+        self.term_out.pack(fill="both", expand=True, padx=8, pady=4)
+        self.term_out.configure(state="disabled")
+ 
+        inp_row = ctk.CTkFrame(term_card, fg_color="transparent")
+        inp_row.pack(fill="x", padx=8, pady=(0, 8))
+ 
+        self.term_prompt = ctk.CTkLabel(inp_row, text="$ ",
+                                        font=ctk.CTkFont("monospace", 12),
+                                        text_color=self.ACCENT2)
+        self.term_prompt.pack(side="left")
+ 
+        self.term_input = ctk.CTkEntry(inp_row, font=ctk.CTkFont("monospace", 12),
+                                       fg_color="#06060e", border_color=self.ACCENT2,
+                                       text_color="#00ff88")
+        self.term_input.pack(side="left", fill="x", expand=True)
+        self.term_input.bind("<Return>", self._run_term_cmd)
+ 
+        self._term_write(f"BlackStar OS v1.0 — Tiny Core Linux\n")
+        self._term_write(f"Введіть команду та натисніть Enter\n")
+ 
+    # ── WALLPAPER ─────────────────────────────────────────────────────────────
+    def _update_wallpaper_preview(self):
+        if not self._wallpapers:
+            self.wall_name_lbl.configure(text="Немає шпалер у папці Wallpaper")
+            return
+        path = self._wallpapers[self._wall_index]
+        self.wall_name_lbl.configure(text=Path(path).name)
+        try:
+            img = Image.open(path).resize((240, 130), Image.LANCZOS)
+            ctk_img = ctk.CTkImage(img, size=(240, 130))
+            self.wall_preview.configure(image=ctk_img, text="")
+            self.wall_preview._image = ctk_img  # keep ref
+        except Exception:
+            self.wall_preview.configure(text="[Помилка зображення]")
+ 
+    def _next_wall(self):
+        if self._wallpapers:
+            self._wall_index = (self._wall_index + 1) % len(self._wallpapers)
+            self._update_wallpaper_preview()
+ 
+    def _prev_wall(self):
+        if self._wallpapers:
+            self._wall_index = (self._wall_index - 1) % len(self._wallpapers)
+            self._update_wallpaper_preview()
+ 
+    def _apply_wall(self):
+        if self._wallpapers:
+            set_wallpaper(self._wallpapers[self._wall_index])
+            self._term_write(f"Шпалери встановлено: {Path(self._wallpapers[self._wall_index]).name}\n")
+ 
+    # ── SOUND ─────────────────────────────────────────────────────────────────
+    def _set_volume(self, val):
+        v = int(float(val))
+        if HAS_PYGAME:
+            pygame.mixer.music.set_volume(v / 100)
+        # amixer fallback
+        try:
+            subprocess.Popen(["amixer", "-q", "set", "Master", f"{v}%"],
+                             stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            pass
+ 
+    # ── MINI TERMINAL ─────────────────────────────────────────────────────────
+    def _term_write(self, text: str):
+        self.term_out.configure(state="normal")
+        self.term_out.insert("end", text)
+        self.term_out.see("end")
+        self.term_out.configure(state="disabled")
+ 
+    def _run_term_cmd(self, _=None):
+        cmd = self.term_input.get().strip()
+        if not cmd:
+            return
+        self.term_input.delete(0, "end")
+        self._term_write(f"$ {cmd}\n")
+ 
+        def _exec():
+            try:
+                out = subprocess.check_output(
+                    cmd, shell=True, stderr=subprocess.STDOUT,
+                    timeout=8, text=True)
+                self.after(0, lambda: self._term_write(out or "(OK)\n"))
+            except subprocess.CalledProcessError as e:
+                self.after(0, lambda: self._term_write(e.output or "(помилка)\n"))
+            except subprocess.TimeoutExpired:
+                self.after(0, lambda: self._term_write("(таймаут)\n"))
+            except Exception as ex:
+                self.after(0, lambda: self._term_write(f"Помилка: {ex}\n"))
+ 
+        threading.Thread(target=_exec, daemon=True).start()
+ 
+    # ── CLOCK ─────────────────────────────────────────────────────────────────
+    def _start_clock(self):
+        def _tick():
+            now = datetime.datetime.now()
+            t = now.strftime("%H:%M:%S")
+            d = now.strftime("%A, %d %B %Y")
+            self.lbl_clock.configure(text=t)
+            self.lbl_date.configure(text=d)
+            self.big_clock.configure(text=now.strftime("%H:%M"))
+            self.big_date_lbl.configure(text=d)
+            self.after(1000, _tick)
+        _tick()
+ 
+    # ── SYS INFO ──────────────────────────────────────────────────────────────
+    def _start_sysinfo(self):
+        def _update():
+            cpu, mem = get_sys_info()
+            self.lbl_sys.configure(text=f"CPU {cpu} | {mem}")
+            self.after(5000, _update)
+        self.after(2000, _update)
+ 
+    # ── SHUTDOWN DIALOG ───────────────────────────────────────────────────────
+    def _shutdown_dialog(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Вихід")
+        dlg.geometry("340x220")
+        dlg.configure(fg_color=self.PANEL)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+ 
+        ctk.CTkLabel(dlg, text="Що ви хочете зробити?",
+                     font=ctk.CTkFont("monospace", 15, "bold"),
+                     text_color=self.TEXT).pack(pady=(24, 16))
+ 
+        actions = [
+            ("⏻  Вимкнути",    "poweroff"),
+            ("🔄  Перезавантажити", "reboot"),
+            ("🔒  Заблокувати", "xlock"),
+            ("❌  Скасувати",   None),
+        ]
+        for label, cmd in actions:
+            color = self.DANGER if "Вимкнути" in label else \
+                    self.WARN   if "Перезав"  in label else \
+                    self.ACCENT2 if "Заблок"  in label else "#333355"
+            def _cb(c=cmd, d=dlg):
+                d.destroy()
+                if c:
+                    run_command(c)
+            ctk.CTkButton(dlg, text=label, fg_color=color,
+                          hover_color="#555566",
+                          font=ctk.CTkFont("monospace", 13),
+                          command=_cb).pack(fill="x", padx=30, pady=3)
  
  
-# ── Entry ──────────────────────────────────────────────────────────────────────
- 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
+    # Install deps if missing
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        pass
-    Shell().mainloop()
+        import customtkinter
+    except ImportError:
+        subprocess.run([sys.executable, "-m", "pip", "install",
+                        "customtkinter", "pillow", "pygame", "--quiet"])
+        import customtkinter as ctk
+ 
+    app = BlackStarShell()
+    app.mainloop()
