@@ -1,16 +1,3 @@
-"""
-BLACKSTAR CustomShell v2.0
-Fixes:
-  - invalid color "#0078D430"  -> use BG_HOVER (solid) for canvas rects
-  - ms-settings:/ms-media:/ms-clock: -> os.startfile() instead of Popen
-  - ImageTk.PhotoImage -> CTkImage for HiDPI compatibility
-New:
-  - Top-centre transparent app bar
-  - Right-side vertical taskbar (no bottom bar)
-  - Desktop shows folders + files + shortcuts with icons
-  - Start Menu: 2 tabs (BLACKSTAR programs / Installed apps)
-"""
- 
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog
@@ -18,6 +5,13 @@ import os, sys, subprocess, threading, datetime, ctypes, winreg
 from pathlib import Path
 from PIL import Image, ImageTk
 import psutil
+import platform
+
+def open_uri(uri: str):
+    if platform.system() == "Windows":
+        os.startfile(uri)
+    else:
+        subprocess.Popen(['xdg-open', uri])
  
 try:
     import win32gui, win32con
